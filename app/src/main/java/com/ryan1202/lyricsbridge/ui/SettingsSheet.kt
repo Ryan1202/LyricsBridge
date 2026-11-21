@@ -3,7 +3,7 @@ package com.ryan1202.lyricsbridge.ui
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
-import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
@@ -13,6 +13,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.ryan1202.lyricsbridge.BridgeUiState
 import com.ryan1202.lyricsbridge.R
@@ -20,12 +21,11 @@ import com.ryan1202.lyricsbridge.R
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun SettingsSheet(
-    accessGranted: Boolean,
-    notificationsGranted: Boolean,
     languageTag: String,
-    onGrantAccess: () -> Unit,
-    onGrantNotifications: () -> Unit,
+    onOpenPermissionGuide: () -> Unit,
     onLanguageChange: (String) -> Unit,
+    islandLyricsEnabled: Boolean,
+    onIslandLyricsChange: (Boolean) -> Unit,
     onDismiss: () -> Unit
 ) {
     ModalBottomSheet(onDismissRequest = onDismiss) {
@@ -47,19 +47,27 @@ internal fun SettingsSheet(
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-            PermissionRow(
-                title = stringResource(R.string.notification_access),
-                description = stringResource(R.string.notification_access_detail),
-                granted = accessGranted,
-                onClick = onGrantAccess
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth()
+                    .toggleable(value = islandLyricsEnabled, role = Role.Switch, onValueChange = onIslandLyricsChange)
+                    .padding(vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(stringResource(R.string.island_lyrics), style = MaterialTheme.typography.titleSmall)
+                    Text(
+                        stringResource(R.string.island_lyrics_detail),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Switch(checked = islandLyricsEnabled, onCheckedChange = null)
+            }
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-            PermissionRow(
-                title = stringResource(R.string.status_notifications),
-                description = stringResource(R.string.status_notifications_detail),
-                granted = notificationsGranted,
-                onClick = onGrantNotifications
-            )
+            TextButton(onClick = onOpenPermissionGuide) {
+                Text(stringResource(R.string.permission_guide))
+            }
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             LanguageOptions(languageTag, onLanguageChange)
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
@@ -133,54 +141,6 @@ private fun SettingsInformation() {
 }
 
 @Composable
-private fun PermissionRow(
-    title: String,
-    description: String,
-    granted: Boolean,
-    onClick: () -> Unit
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        Column(
-            modifier = Modifier.weight(1f),
-            verticalArrangement = Arrangement.spacedBy(4.dp)
-        ) {
-            Text(title, style = MaterialTheme.typography.titleMedium)
-            Text(
-                text = description,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
-        if (granted) {
-            Surface(
-                shape = CircleShape,
-                color = MaterialTheme.colorScheme.secondaryContainer
-            ) {
-                Text(
-                    text = stringResource(R.string.enabled),
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSecondaryContainer
-                )
-            }
-        } else {
-            TextButton(
-                onClick = onClick,
-                modifier = Modifier.heightIn(min = 48.dp)
-            ) {
-                Text(stringResource(R.string.enable))
-            }
-        }
-    }
-}
-
-@Composable
 internal fun MatchDetailsDialog(
     state: BridgeUiState,
     onDismiss: () -> Unit
@@ -204,5 +164,18 @@ internal fun MatchDetailsDialog(
                 Text(stringResource(R.string.done))
             }
         }
+    )
+}
+
+@Preview(showBackground = true, widthDp = 393, heightDp = 852)
+@Composable
+fun SettingsPreview() {
+    SettingsSheet(
+        languageTag = "en",
+        onOpenPermissionGuide = {},
+        onLanguageChange = {},
+        islandLyricsEnabled = true,
+        onIslandLyricsChange = {},
+        onDismiss = {}
     )
 }

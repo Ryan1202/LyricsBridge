@@ -20,6 +20,8 @@ import java.io.File
 import java.util.concurrent.Executors
 import java.util.concurrent.Future
 
+internal const val SYNC_NOTIFICATION_CHANNEL = "sync"
+
 class BridgeService : Service() {
     private val handler = Handler(Looper.getMainLooper())
     private val network = Executors.newSingleThreadExecutor()
@@ -43,8 +45,8 @@ class BridgeService : Service() {
     private var destroyed = false
     private val listenerComponent by lazy { ComponentName(this, MediaAccessService::class.java) }
     private val sourceCallback = object : MediaController.Callback() {
-        override fun onMetadataChanged(metadata: android.media.MediaMetadata?) { sourceMetadata = metadata; update() }
-        override fun onPlaybackStateChanged(state: PlaybackState?) { sourcePlayback = state; update() }
+        override fun onMetadataChanged(metadata: android.media.MediaMetadata?) { update() }
+        override fun onPlaybackStateChanged(state: PlaybackState?) { update() }
         override fun onSessionDestroyed() { selectSource() }
     }
     private val sessionsListener = MediaSessionManager.OnActiveSessionsChangedListener { selectSource() }
@@ -55,7 +57,7 @@ class BridgeService : Service() {
         super.onCreate()
         manager = getSystemService(MediaSessionManager::class.java)
         notifications = getSystemService(NotificationManager::class.java)
-        notifications.createNotificationChannel(NotificationChannel("sync", localizedString(R.string.notification_channel), NotificationManager.IMPORTANCE_LOW))
+        notifications.createNotificationChannel(NotificationChannel(SYNC_NOTIFICATION_CHANNEL, localizedString(R.string.notification_channel), NotificationManager.IMPORTANCE_LOW))
         notifications.cancel(2)
         repository = LyricRepository(File(filesDir, "lyrics-cache.json"))
         writer = AppleMusicLyricsWriter(this) { update() }
@@ -90,6 +92,7 @@ class BridgeService : Service() {
             }
         }
         if (intent?.action == "retry") track?.let { load(it, true) }
+        if (intent?.action == "island") update()
         return START_STICKY
     }
     private fun selectSource() {
@@ -155,7 +158,7 @@ class BridgeService : Service() {
     }
 
     private fun refreshLanguage() {
-        notifications.createNotificationChannel(NotificationChannel("sync", localizedString(R.string.notification_channel), NotificationManager.IMPORTANCE_LOW))
+        notifications.createNotificationChannel(NotificationChannel(SYNC_NOTIFICATION_CHANNEL, localizedString(R.string.notification_channel), NotificationManager.IMPORTANCE_LOW))
         publication = result?.let { publicationFor(it) }
             ?: if (fetching) LyricPublication.matching(localizedString(R.string.matching)) else LyricPublication.empty
         timeline = publication.timeline
@@ -172,9 +175,11 @@ class BridgeService : Service() {
     }
     private fun update() {
         if (!running || destroyed) return
+        sourceMetadata = source?.metadata
+        sourcePlayback = source?.playbackState
+        writer.refresh(sourceMetadata, sourcePlayback)
         val metadata = sourceMetadata
-        val platformSong = TrackInfo.from(metadata)
-        val song = platformSong ?: writer.currentTrack()
+        val song = writer.currentTrack()
         if (song != null && song.needsLyricsLookup(track)) load(song)
         if (song == null && track != null) {
             epoch++
@@ -192,13 +197,11 @@ class BridgeService : Service() {
         val playback = if (state == PlaybackState.STATE_PLAYING) localizedString(R.string.playing) else localizedString(R.string.paused)
         val lyricStatus = publication.status
         val raw = publication.raw
-        val published = song != null && platformSong?.identity == song.identity &&
-            metadata?.getString(AppleMusicLyricsWriter.WHOLE) == raw &&
-            metadata.getString(AppleMusicLyricsWriter.LINE) == line &&
-            metadata.getLong(AppleMusicLyricsWriter.STATUS) == lyricStatus
+        val islandLyrics = SyncPreference.islandLyricsEnabled(this) && result?.instrumental == false
+        val published = song != null && writer.isPublished(metadata, song, raw, line, lyricStatus, islandLyrics)
         val writeStatus = when {
             published -> localizedString(R.string.lyrics_written)
-            song != null -> writer.write(song, raw, line, lyricStatus)
+            song != null -> writer.write(song, raw, line, lyricStatus, islandLyrics)
             else -> localizedString(R.string.waiting_apple_music)
         }
         val fetchStatus = when {
@@ -222,7 +225,7 @@ class BridgeService : Service() {
         val currentIndex = lines.indexOfLast { it.timeMs <= pos }
         BridgeStatus.ui.value = BridgeUiState(
             running = true, song = song,
-            artwork = if (platformSong?.identity == song?.identity) {
+            artwork = if (writer.matchesPlatformTrack(metadata, song)) {
                 metadata?.getBitmap(android.media.MediaMetadata.METADATA_KEY_ALBUM_ART)
                     ?: metadata?.getBitmap(android.media.MediaMetadata.METADATA_KEY_ART)
             } else null,
@@ -257,12 +260,14 @@ class BridgeService : Service() {
             timeline?.delayUntilNextLine(pos, sourcePlayback?.playbackSpeed ?: 1f)
         } else null
         val writeDelay = if (writeStatus == localizedString(R.string.writing_lyrics)) writer.retryDelayMs() else null
-        listOfNotNull(boundaryDelay, writeDelay).minOrNull()?.let { handler.postDelayed(tick, it) }
+        // Keep observing active sessions after the last lyric, including while paused.
+        val sessionDelay = if (source != null) 1_000L else null
+        listOfNotNull(boundaryDelay, writeDelay, sessionDelay).minOrNull()?.let { handler.postDelayed(tick, it) }
     }
     private fun notification(text: String): Notification {
         val open = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         val stop = PendingIntent.getService(this, 1, Intent(this, BridgeService::class.java).setAction("stop"), PendingIntent.FLAG_IMMUTABLE)
-        return Notification.Builder(this, "sync").setSmallIcon(R.drawable.ic_brand)
+        return Notification.Builder(this, SYNC_NOTIFICATION_CHANNEL).setSmallIcon(R.drawable.ic_brand)
             .setContentTitle(localizedString(R.string.notification_title)).setContentText(text).setContentIntent(open)
             .setOngoing(true).setOnlyAlertOnce(true).setShowWhen(false)
             .addAction(Notification.Action.Builder(null, localizedString(R.string.pause_sync), stop).build()).build()

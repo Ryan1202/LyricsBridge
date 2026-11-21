@@ -20,8 +20,12 @@ fun LyricsBridgeScreen(
     onToggleSync: () -> Unit,
     onRetry: () -> Unit,
     onOpenMusic: () -> Unit,
-    onGrantAccess: () -> Unit,
-    onGrantNotifications: () -> Unit,
+    onOpenAccessSettings: () -> Unit,
+    onOpenNotificationSettings: () -> Unit,
+    onOpenBatterySettings: () -> Unit,
+    onOpenSystemSettings: () -> Unit,
+    islandLyricsEnabled: Boolean = false,
+    onIslandLyricsChange: (Boolean) -> Unit = {},
     canPlayPause: Boolean = false,
     canSkipPrevious: Boolean = false,
     canSkipNext: Boolean = false,
@@ -34,6 +38,7 @@ fun LyricsBridgeScreen(
     onLanguageChange: (String) -> Unit = {}
 ) {
     var settingsOpen by rememberSaveable { mutableStateOf(false) }
+    var permissionGuideOpen by rememberSaveable { mutableStateOf(false) }
     var matchDetailsOpen by remember { mutableStateOf(false) }
     val playbackActions = PlaybackActions(
         canPlayPause = canPlayPause,
@@ -55,7 +60,10 @@ fun LyricsBridgeScreen(
             BridgeBottomBar(
                 state = state,
                 accessGranted = accessGranted,
-                onToggleSync = onToggleSync,
+                onToggleSync = {
+                    if (!state.running && !accessGranted) permissionGuideOpen = true
+                    else onToggleSync()
+                },
                 onOpenMusic = onOpenMusic,
                 onRetry = onRetry
             )
@@ -66,19 +74,28 @@ fun LyricsBridgeScreen(
             state = state,
             accessGranted = accessGranted,
             playbackActions = playbackActions,
-            onGrantAccess = onGrantAccess,
+            onOpenPermissionGuide = { permissionGuideOpen = true },
             onOpenMatchDetails = { matchDetailsOpen = true }
         )
     }
 
-    if (settingsOpen) {
-        SettingsSheet(
+    if (permissionGuideOpen) {
+        PermissionGuide(
             accessGranted = accessGranted,
             notificationsGranted = notificationsGranted,
+            onOpenAccessSettings = onOpenAccessSettings,
+            onOpenNotificationSettings = onOpenNotificationSettings,
+            onOpenBatterySettings = onOpenBatterySettings,
+            onOpenSystemSettings = onOpenSystemSettings,
+            onDismiss = { permissionGuideOpen = false }
+        )
+    } else if (settingsOpen) {
+        SettingsSheet(
             languageTag = languageTag,
-            onGrantAccess = onGrantAccess,
-            onGrantNotifications = onGrantNotifications,
+            onOpenPermissionGuide = { permissionGuideOpen = true },
             onLanguageChange = onLanguageChange,
+            islandLyricsEnabled = islandLyricsEnabled,
+            onIslandLyricsChange = onIslandLyricsChange,
             onDismiss = { settingsOpen = false }
         )
     }
@@ -102,8 +119,10 @@ private fun LightPreview() {
             onToggleSync = {},
             onRetry = {},
             onOpenMusic = {},
-            onGrantAccess = {},
-            onGrantNotifications = {},
+            onOpenAccessSettings = {},
+            onOpenNotificationSettings = {},
+            onOpenBatterySettings = {},
+            onOpenSystemSettings = {},
         )
     }
 }
@@ -133,8 +152,10 @@ private fun DarkPreview() {
             onToggleSync = {},
             onRetry = {},
             onOpenMusic = {},
-            onGrantAccess = {},
-            onGrantNotifications = {},
+            onOpenAccessSettings = {},
+            onOpenNotificationSettings = {},
+            onOpenBatterySettings = {},
+            onOpenSystemSettings = {},
         )
     }
 }

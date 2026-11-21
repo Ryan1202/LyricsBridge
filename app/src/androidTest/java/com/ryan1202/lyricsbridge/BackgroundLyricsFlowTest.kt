@@ -19,7 +19,7 @@ import java.util.concurrent.atomic.AtomicReference
 
 @RunWith(AndroidJUnit4::class)
 class BackgroundLyricsFlowTest {
-    @Test fun naturalAdvancePublishesNextLyricsAndUpdatesLinesWhileOnHome() {
+    @Test fun naturalAdvancePublishesNextLyricsAndReopeningKeepsTheCurrentSong() {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val context = instrumentation.targetContext
         fun status(message: String) = instrumentation.sendStatus(0, Bundle().apply { putString("stream", "$message\n") })
@@ -34,28 +34,36 @@ class BackgroundLyricsFlowTest {
         val observed = AtomicReference(source.metadata)
         val wasPlaying = source.playbackState?.state == PlaybackState.STATE_PLAYING
         val enabled = SyncPreference.enabled(context)
+        val islandEnabled = SyncPreference.islandLyricsEnabled(context)
+        val expectedId = AtomicReference<String?>(null)
+        val overwritten = AtomicReference<MediaMetadata?>(null)
         val callback = object : MediaController.Callback() {
-            override fun onMetadataChanged(metadata: MediaMetadata?) { observed.set(metadata) }
+            override fun onMetadataChanged(metadata: MediaMetadata?) {
+                observed.set(metadata)
+                expectedId.get()?.let { id ->
+                    if (metadata?.getString(MediaMetadata.METADATA_KEY_MEDIA_ID) != id) overwritten.set(metadata)
+                }
+            }
         }
         source.registerCallback(callback, Handler(Looper.getMainLooper()))
         try {
-            val initial = TrackInfo.from(observed.get())!!
-            source.transportControls.skipToNext()
-            await("Refresh Apple Music native metadata before writing", 10_000) {
-                TrackInfo.from(observed.get())?.let { it.identity != initial.identity } == true
-            }
-            val before = TrackInfo.from(observed.get())!!
-            val expectedNext = source.queue?.getOrNull(1)?.description?.title?.toString()
-            assertNotNull("A following song is needed in the original Apple Music queue", expectedNext)
-            assertNotEquals(before.title, expectedNext)
-            assertTrue(before.durationMs > 5_000)
+            val initialId = observed.get()?.getString(MediaMetadata.METADATA_KEY_MEDIA_ID)
             SyncPreference.setEnabled(context, true)
+            SyncPreference.setIslandLyricsEnabled(context, false)
             context.startActivity(Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
             context.startForegroundService(Intent(context, BridgeService::class.java).setAction("follow"))
             await("Initial song lyrics must be ready", 45_000) {
                 val ui = BridgeStatus.ui.value
-                ui.song?.identity == before.identity && !ui.fetching && ui.provider.isNotBlank()
+                ui.song?.id == initialId && !ui.fetching && ui.provider.isNotBlank()
             }
+            val before = BridgeStatus.ui.value.song!!
+            val queue = source.queue.orEmpty()
+            val currentIndex = queue.indexOfFirst { it.queueId == source.playbackState?.activeQueueItemId }
+            assertTrue("The current song must be present in Apple Music's queue", currentIndex >= 0)
+            val expectedNext = queue.getOrNull(currentIndex + 1)?.description?.title?.toString()
+            assertNotNull("A following song is needed in the original Apple Music queue", expectedNext)
+            assertNotEquals(before.title, expectedNext)
+            assertTrue(before.durationMs > 5_000)
             val previousRaw = observed.get()?.getString(AppleMusicLyricsWriter.WHOLE)
             context.startActivity(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
             status("On Home; awaiting natural advance: ${before.title} -> $expectedNext")
@@ -78,10 +86,21 @@ class BackgroundLyricsFlowTest {
             assertEquals(expectedNext, observed.get()?.getString(MediaMetadata.METADATA_KEY_TITLE))
             assertEquals(next.artist, observed.get()?.getString(MediaMetadata.METADATA_KEY_ARTIST))
             assertEquals(next.identity, BridgeStatus.ui.value.song?.identity)
-            status("Background natural advance and timed lyric-line publication passed: ${next.title}; provider=${BridgeStatus.ui.value.provider}")
+            source.transportControls.pause()
+            expectedId.set(next.id)
+            context.startActivity(Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            instrumentation.waitForIdleSync()
+            Thread.sleep(2_000)
+            assertNull("Opening the app must not write the previous song back into the session", overwritten.get())
+            assertEquals(next.identity, BridgeStatus.ui.value.song?.identity)
+            assertEquals(next.id, source.metadata?.getString(MediaMetadata.METADATA_KEY_MEDIA_ID))
+            assertEquals(next.title, source.metadata?.getString(MediaMetadata.METADATA_KEY_TITLE))
+            status("Background natural advance, lyric-line publication and reopening preserve the current song: ${next.title}")
         } finally {
-            if (!wasPlaying) source.transportControls.pause()
+            expectedId.set(null)
+            if (wasPlaying) source.transportControls.play() else source.transportControls.pause()
             source.unregisterCallback(callback)
+            SyncPreference.setIslandLyricsEnabled(context, islandEnabled)
             SyncPreference.setEnabled(context, enabled)
             if (!enabled) context.stopService(Intent(context, BridgeService::class.java))
         }

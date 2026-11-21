@@ -1,13 +1,14 @@
 package com.ryan1202.lyricsbridge
 
-import android.Manifest
 import android.app.NotificationManager
+import android.content.ActivityNotFoundException
 import android.content.ComponentName
 import android.content.Intent
 import android.media.MediaMetadata
 import android.media.session.MediaController
 import android.media.session.MediaSessionManager
 import android.media.session.PlaybackState
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -20,7 +21,6 @@ import androidx.appcompat.app.AppCompatDelegate
 import androidx.core.os.LocaleListCompat
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -32,6 +32,7 @@ import com.ryan1202.lyricsbridge.ui.LyricsBridgeTheme
 class MainActivity : AppCompatActivity() {
     private var accessGranted by mutableStateOf(false)
     private var notificationsGranted by mutableStateOf(false)
+    private var islandLyricsEnabled by mutableStateOf(false)
     private var playbackActions by mutableStateOf(0L)
     private var mediaPlaying by mutableStateOf(false)
     private var musicController: MediaController? = null
@@ -59,9 +60,6 @@ class MainActivity : AppCompatActivity() {
         override fun onPlaybackStateChanged(state: PlaybackState?) { refreshPlayback() }
         override fun onSessionDestroyed() { selectController() }
     }
-    private val notificationPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) {
-        refreshPermissions()
-    }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -76,14 +74,22 @@ class MainActivity : AppCompatActivity() {
                         if (state.running) {
                             SyncPreference.setEnabled(this, false)
                             stopService(Intent(this, BridgeService::class.java))
+                        } else {
+                            startSync("follow")
                         }
-                        else if (!accessGranted) openAccessSettings()
-                        else startSync("follow")
                     },
                     onRetry = { startSync("retry") },
                     onOpenMusic = { openMusic() },
-                    onGrantAccess = { openAccessSettings() },
-                    onGrantNotifications = { requestNotifications() },
+                    onOpenAccessSettings = { openAccessSettings() },
+                    onOpenNotificationSettings = { openNotificationSettings() },
+                    onOpenBatterySettings = { openXiaomiBatterySettings() },
+                    onOpenSystemSettings = { startActivity(Intent(Settings.ACTION_SETTINGS)) },
+                    islandLyricsEnabled = islandLyricsEnabled,
+                    onIslandLyricsChange = { enabled ->
+                        SyncPreference.setIslandLyricsEnabled(this, enabled)
+                        islandLyricsEnabled = enabled
+                        if (BridgeStatus.ui.value.running) startService(Intent(this, BridgeService::class.java).setAction("island"))
+                    },
                     canPlayPause = playbackActions and (PlaybackState.ACTION_PLAY_PAUSE or
                         if (mediaPlaying) PlaybackState.ACTION_PAUSE else PlaybackState.ACTION_PLAY) != 0L,
                     canSkipPrevious = playbackActions and PlaybackState.ACTION_SKIP_TO_PREVIOUS != 0L,
@@ -107,15 +113,70 @@ class MainActivity : AppCompatActivity() {
             }
         }
     }
-    private fun openAccessSettings() { startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) }
-    private fun requestNotifications() {
-        if (Build.VERSION.SDK_INT >= 33 && !notificationsGranted) notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
-        else startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, packageName))
+    private fun openAccessSettings() {
+        val listenerSettings = Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)
+        val detailSettings = if (Build.VERSION.SDK_INT >= 30) {
+            Intent(Settings.ACTION_NOTIFICATION_LISTENER_DETAIL_SETTINGS)
+                .putExtra(Settings.EXTRA_NOTIFICATION_LISTENER_COMPONENT_NAME, listenerComponent.flattenToString())
+        } else {
+            listenerSettings
+        }
+        openSettings(detailSettings, listenerSettings)
     }
+
+    private fun openNotificationSettings() {
+        val appNotifications = Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+            .putExtra(Settings.EXTRA_APP_PACKAGE, packageName)
+        val appDetails = appDetailsSettings()
+        val manager = getSystemService(NotificationManager::class.java)
+        if (manager.areNotificationsEnabled() && !syncNotificationChannelEnabled(manager)) {
+            val syncChannel = Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS)
+                .putExtra(Settings.EXTRA_APP_PACKAGE, packageName)
+                .putExtra(Settings.EXTRA_CHANNEL_ID, SYNC_NOTIFICATION_CHANNEL)
+            openSettings(syncChannel, appNotifications, appDetails)
+        } else {
+            openSettings(appNotifications, appDetails)
+        }
+    }
+
+    private fun openXiaomiBatterySettings() {
+        val powerKeeper = Intent()
+            .setClassName("com.miui.powerkeeper", "com.miui.powerkeeper.ui.HiddenAppsConfigActivity")
+            .putExtra("package_name", packageName)
+            .putExtra("package_label", getString(R.string.app_name))
+        openSettings(powerKeeper, appDetailsSettings())
+    }
+
+    private fun appDetailsSettings() =
+        Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", packageName, null))
+
+    private fun openSettings(vararg intents: Intent) {
+        for (intent in intents.distinct()) {
+            try {
+                startActivity(intent)
+                return
+            } catch (_: ActivityNotFoundException) {
+                // Try the next Settings entry point.
+            } catch (_: SecurityException) {
+                // Some system settings activities cannot be opened from an app.
+            }
+        }
+        startActivity(Intent(Settings.ACTION_SETTINGS))
+    }
+
     private fun refreshPermissions() {
-        accessGranted = NotificationManagerCompat.getEnabledListenerPackages(this).contains(packageName)
-        notificationsGranted = getSystemService(NotificationManager::class.java).areNotificationsEnabled()
+        val manager = getSystemService(NotificationManager::class.java)
+        accessGranted = if (Build.VERSION.SDK_INT >= 27) {
+            manager.isNotificationListenerAccessGranted(listenerComponent)
+        } else {
+            NotificationManagerCompat.getEnabledListenerPackages(this).contains(packageName)
+        }
+        notificationsGranted = manager.areNotificationsEnabled() && syncNotificationChannelEnabled(manager)
     }
+
+    private fun syncNotificationChannelEnabled(manager: NotificationManager): Boolean =
+        manager.getNotificationChannel(SYNC_NOTIFICATION_CHANNEL)?.importance != NotificationManager.IMPORTANCE_NONE
+
     private fun openMusic() {
         packageManager.getLaunchIntentForPackage("com.apple.android.music")?.let { startActivity(it) }
             ?: Toast.makeText(this, getString(R.string.music_not_installed), Toast.LENGTH_LONG).show()
@@ -128,6 +189,7 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         visible = true
+        islandLyricsEnabled = SyncPreference.islandLyricsEnabled(this)
         if (BridgeStatus.ui.value.running) startService(Intent(this, BridgeService::class.java).setAction("language"))
         refreshPermissions()
         if (accessGranted) {

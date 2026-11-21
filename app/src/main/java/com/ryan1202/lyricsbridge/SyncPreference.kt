@@ -9,4 +9,11 @@ object SyncPreference {
     fun setEnabled(context: Context, enabled: Boolean) {
         context.getSharedPreferences("sync", Context.MODE_PRIVATE).edit().putBoolean("enabled", enabled).apply()
     }
+
+    fun islandLyricsEnabled(context: Context) = context.getSharedPreferences("sync", Context.MODE_PRIVATE)
+        .getBoolean("island_lyrics", false)
+
+    fun setIslandLyricsEnabled(context: Context, enabled: Boolean) {
+        context.getSharedPreferences("sync", Context.MODE_PRIVATE).edit().putBoolean("island_lyrics", enabled).apply()
+    }
 }

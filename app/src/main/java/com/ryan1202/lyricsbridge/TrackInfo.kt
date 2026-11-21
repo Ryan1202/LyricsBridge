@@ -7,7 +7,14 @@ data class TrackInfo(val id: String, val title: String, val artist: String, val 
     val key get() = listOf(id, title, artist, album, durationMs.toString()).joinToString("\n")
     fun needsLyricsLookup(previous: TrackInfo?) = identity != previous?.identity ||
         kotlin.math.abs(durationMs - (previous?.durationMs ?: 0)) > 1_000
+    fun matchesSessionTrack(other: TrackInfo?, titleIsLyric: Boolean = false) = other != null &&
+        id == other.id && artist == other.artist && album == other.album && (title == other.title || titleIsLyric)
     companion object {
+        fun current(native: TrackInfo?, platform: TrackInfo?, titleIsLyric: Boolean): TrackInfo? = when {
+            native?.matchesSessionTrack(platform, titleIsLyric) == true -> native
+            titleIsLyric -> null
+            else -> platform
+        }
         fun from(metadata: MediaMetadata?): TrackInfo? {
             metadata ?: return null
             val title = metadata.getString(MediaMetadata.METADATA_KEY_TITLE).orEmpty()

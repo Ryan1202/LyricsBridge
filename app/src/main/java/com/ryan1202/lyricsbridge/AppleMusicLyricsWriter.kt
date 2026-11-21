@@ -33,13 +33,10 @@ class AppleMusicLyricsWriter(private val context: Context, private val onReady: 
     private var observedTrack: String? = null
     private var positionTrack: String? = null
     private var lastPosition: Long? = null
+    private var mismatchSince = 0L
     private val handler = Handler(Looper.getMainLooper())
     private var originalExtras: Bundle? = null
     private var originalTrack: TrackInfo? = null
-    private val platformListener = object : PlatformController.Callback() {
-        override fun onMetadataChanged(metadata: MediaMetadata?) { platformMetadata = metadata; onReady() }
-        override fun onPlaybackStateChanged(state: PlaybackState?) { platformPlayback = state; onReady() }
-    }
     private val playerListener = object : Player.Listener {
         override fun onEvents(player: Player, events: Player.Events) {
             if (events.containsAny(Player.EVENT_MEDIA_ITEM_TRANSITION, Player.EVENT_MEDIA_METADATA_CHANGED,
@@ -69,9 +66,27 @@ class AppleMusicLyricsWriter(private val context: Context, private val onReady: 
         platform = next
         platformMetadata = metadata
         platformPlayback = playback
-        next?.registerCallback(platformListener, handler)
         token = next?.sessionToken
         retryAt = 0
+        connect()
+    }
+    fun refresh(metadata: MediaMetadata?, playback: PlaybackState?) {
+        platformMetadata = metadata
+        platformPlayback = playback
+        val native = nativeTrack()
+        if (native != null && metadata != null && !matchesPlatformTrack(metadata, native)) {
+            writeGeneration++
+            writing = false
+            val now = SystemClock.elapsedRealtime()
+            if (mismatchSince == 0L) mismatchSince = now
+            else if (now - mismatchSince >= 1_000) {
+                val stale = controller
+                controller = null
+                stale?.removeListener(playerListener)
+                stale?.release()
+                mismatchSince = 0
+            }
+        } else mismatchSince = 0
         connect()
     }
     private fun connect() {
@@ -128,7 +143,7 @@ class AppleMusicLyricsWriter(private val context: Context, private val onReady: 
             SongMatcher.normalize(metadata.title?.toString().orEmpty()) == SongMatcher.normalize(track.title) &&
             SongMatcher.normalize(metadata.artist?.toString().orEmpty()) == SongMatcher.normalize(track.artist)
     }
-    fun currentTrack(): TrackInfo? {
+    private fun nativeTrack(): TrackInfo? {
         val connected = controller ?: return null
         val item = connected.currentMediaItem ?: return null
         val metadata = item.mediaMetadata
@@ -138,14 +153,30 @@ class AppleMusicLyricsWriter(private val context: Context, private val onReady: 
         return TrackInfo(item.mediaId, title, artist, metadata.albumTitle?.toString().orEmpty(),
             (metadata.durationMs ?: connected.duration).coerceAtLeast(0))
     }
+    fun currentTrack(): TrackInfo? = TrackInfo.current(nativeTrack(), TrackInfo.from(platformMetadata),
+        titleIsLyric(platformMetadata))
     fun currentPosition(track: TrackInfo?): Long? {
         val connected = controller ?: return null
         val item = connected.currentMediaItem ?: return null
         if (track == null || !sameTrack(item, track)) return null
         return connected.currentPosition.coerceAtLeast(0)
     }
-    fun write(track: TrackInfo, raw: String, line: String, lyricStatus: Long): String {
-        connect()
+    fun matchesPlatformTrack(metadata: MediaMetadata?, track: TrackInfo?): Boolean {
+        return track?.matchesSessionTrack(TrackInfo.from(metadata), titleIsLyric(metadata)) == true
+    }
+    private fun titleIsLyric(metadata: MediaMetadata?): Boolean {
+        val line = metadata?.getString(LINE)
+        return !line.isNullOrBlank() && metadata.getString(MediaMetadata.METADATA_KEY_TITLE) == line
+    }
+    fun isPublished(metadata: MediaMetadata?, track: TrackInfo, raw: String, line: String,
+                    lyricStatus: Long, islandLyrics: Boolean): Boolean {
+        val title = if (islandLyrics && lyricStatus == 0L && line.isNotBlank()) line else track.title
+        return matchesPlatformTrack(metadata, track) &&
+            metadata?.getString(WHOLE) == raw && metadata.getString(LINE) == line &&
+            metadata.getLong(STATUS) == lyricStatus && metadata.getString(MediaMetadata.METADATA_KEY_TITLE) == title
+    }
+    fun write(track: TrackInfo, raw: String, line: String, lyricStatus: Long, islandLyrics: Boolean = false): String {
+        refresh(platform?.metadata, platform?.playbackState)
         val connected = controller ?: return status
         if (!connected.isCommandAvailable(Player.COMMAND_CHANGE_MEDIA_ITEMS)) return context.localizedString(R.string.update_not_allowed)
         val item = connected.currentMediaItem ?: return context.localizedString(R.string.waiting_media_item)
@@ -168,8 +199,8 @@ class AppleMusicLyricsWriter(private val context: Context, private val onReady: 
             lastWrite = 0
         }
         val current = platformMetadata
-        if (TrackInfo.from(current)?.identity != track.identity) return context.localizedString(R.string.waiting_track_change)
-        if (current?.getString(WHOLE) == raw && current.getString(LINE) == line && current.getLong(STATUS) == lyricStatus) {
+        if (!matchesPlatformTrack(current, track)) return context.localizedString(R.string.waiting_track_change)
+        if (isPublished(current, track, raw, line, lyricStatus, islandLyrics)) {
             return context.localizedString(R.string.lyrics_written)
         }
         if (writing || SystemClock.elapsedRealtime() - lastWrite < 750) return context.localizedString(R.string.writing_lyrics)
@@ -177,20 +208,23 @@ class AppleMusicLyricsWriter(private val context: Context, private val onReady: 
         extras.putString(WHOLE, raw)
         extras.putString(LINE, line)
         extras.putLong(STATUS, lyricStatus)
+        if (islandLyrics && lyricStatus == 0L && line.isNotBlank()) {
+            extras.putString(MediaMetadata.METADATA_KEY_TITLE, line)
+        } else extras.remove(MediaMetadata.METADATA_KEY_TITLE)
         val epoch = generation
         val writeEpoch = writeGeneration
         writing = true
         lastWrite = SystemClock.elapsedRealtime()
         // This Media3 field triggers metadata equality checks without clearing Apple's queue extras.
-        connected.replaceMediaItem(0, replacement(item, extras, refresh = true))
+        connected.replaceMediaItem(connected.currentMediaItemIndex, replacement(item, extras, refresh = true))
         handler.postDelayed({
             if (epoch == generation && writeEpoch == writeGeneration) {
                 val latest = connected.currentMediaItem
-                val platformTrack = TrackInfo.from(platformMetadata)
-                val latestPosition = platformPlayback?.position
+                val latestMetadata = platform?.metadata
+                val latestPosition = platform?.playbackState?.position
                 val positionConsistent = position == null || latestPosition == null || latestPosition + 1_000 >= position
-                if (latest != null && sameTrack(latest, track) && platformTrack?.identity == track.identity && positionConsistent) {
-                    connected.replaceMediaItem(0, replacement(latest, extras))
+                if (latest != null && sameTrack(latest, track) && matchesPlatformTrack(latestMetadata, track) && positionConsistent) {
+                    connected.replaceMediaItem(connected.currentMediaItemIndex, replacement(latest, extras))
                 }
                 writing = false
                 onReady()
@@ -211,27 +245,29 @@ class AppleMusicLyricsWriter(private val context: Context, private val onReady: 
         generation++
         val old = controller
         val oldPlatform = platform
-        val oldPosition = platformPlayback?.position
-        val oldMetadata = platformMetadata
-        oldPlatform?.unregisterCallback(platformListener)
+        val oldPosition = oldPlatform?.playbackState?.position
+        val detachGeneration = generation
         old?.removeListener(playerListener)
         val item = old?.currentMediaItem
         val track = originalTrack
         val saved = originalExtras
         if (old != null && item != null && track != null && saved != null && sameTrack(item, track) &&
+            matchesPlatformTrack(oldPlatform?.metadata, track) &&
             old.isCommandAvailable(Player.COMMAND_CHANGE_MEDIA_ITEMS)) {
             val extras = Bundle(item.mediaMetadata.extras ?: saved)
+            extras.remove(MediaMetadata.METADATA_KEY_TITLE)
             for (key in listOf(WHOLE, LINE, STATUS)) extras.remove(key)
             if (saved.containsKey(WHOLE)) extras.putCharSequence(WHOLE, saved.getCharSequence(WHOLE))
             if (saved.containsKey(LINE)) extras.putCharSequence(LINE, saved.getCharSequence(LINE))
             if (saved.containsKey(STATUS)) extras.putLong(STATUS, saved.getLong(STATUS))
-            old.replaceMediaItem(0, replacement(item, extras, refresh = true))
+            old.replaceMediaItem(old.currentMediaItemIndex, replacement(item, extras, refresh = true))
             handler.postDelayed({
                 val latest = old.currentMediaItem
-                val position = old.currentPosition
-                val positionConsistent = oldPosition == null || position + 1_000 >= oldPosition
-                if (latest != null && sameTrack(latest, track) && TrackInfo.from(oldMetadata)?.identity == track.identity && positionConsistent) {
-                    old.replaceMediaItem(0, replacement(latest, extras))
+                val position = oldPlatform?.playbackState?.position
+                val positionConsistent = oldPosition == null || position == null || position + 1_000 >= oldPosition
+                if (detachGeneration == generation && latest != null && sameTrack(latest, track) &&
+                    matchesPlatformTrack(oldPlatform?.metadata, track) && positionConsistent) {
+                    old.replaceMediaItem(old.currentMediaItemIndex, replacement(latest, extras))
                 }
                 handler.postDelayed({ old.release() }, 400)
             }, 100)
@@ -248,6 +284,7 @@ class AppleMusicLyricsWriter(private val context: Context, private val onReady: 
         observedTrack = null
         positionTrack = null
         lastPosition = null
+        mismatchSince = 0
         statusId = R.string.waiting_session
     }
     companion object {

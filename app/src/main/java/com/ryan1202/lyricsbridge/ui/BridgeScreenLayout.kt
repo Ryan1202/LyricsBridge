@@ -171,7 +171,7 @@ internal fun BridgeContent(
     state: BridgeUiState,
     accessGranted: Boolean,
     playbackActions: PlaybackActions,
-    onGrantAccess: () -> Unit,
+    onOpenPermissionGuide: () -> Unit,
     onOpenMatchDetails: () -> Unit,
 ) {
     BoxWithConstraints(
@@ -186,7 +186,7 @@ internal fun BridgeContent(
             accessGranted = accessGranted,
             playbackActions = playbackActions,
             useTwoColumns = useTwoColumns,
-            onGrantAccess = onGrantAccess,
+            onOpenPermissionGuide = onOpenPermissionGuide,
             onOpenMatchDetails = onOpenMatchDetails,
         )
     }
@@ -198,7 +198,7 @@ private fun ScrollableContent(
     accessGranted: Boolean,
     playbackActions: PlaybackActions,
     useTwoColumns: Boolean,
-    onGrantAccess: () -> Unit,
+    onOpenPermissionGuide: () -> Unit,
     onOpenMatchDetails: () -> Unit,
 ) {
     Box(
@@ -216,7 +216,7 @@ private fun ScrollableContent(
         ) {
             ScreenIntroduction()
             if (!accessGranted) {
-                AccessPrompt(onGrantAccess)
+                AccessPrompt(onOpenPermissionGuide)
             }
             ContentCards(
                 state = state,
@@ -251,7 +251,7 @@ private fun ScreenIntroduction() {
 }
 
 @Composable
-private fun AccessPrompt(onGrantAccess: () -> Unit) {
+private fun AccessPrompt(onOpenPermissionGuide: () -> Unit) {
     Card(
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.primaryContainer
@@ -270,14 +270,8 @@ private fun AccessPrompt(onGrantAccess: () -> Unit) {
                 text = stringResource(R.string.connect_detail),
                 style = MaterialTheme.typography.bodyMedium
             )
-            TextButton(onClick = onGrantAccess) {
-                Text(stringResource(R.string.grant_access))
-                Spacer(Modifier.width(8.dp))
-                Icon(
-                    painter = painterResource(R.drawable.ic_open),
-                    contentDescription = null,
-                    modifier = Modifier.size(18.dp)
-                )
+            TextButton(onClick = onOpenPermissionGuide) {
+                Text(stringResource(R.string.permission_guide))
             }
         }
     }

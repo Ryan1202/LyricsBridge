@@ -76,6 +76,7 @@
 | **Catalog Metadata Correction** | When exact vocal lyrics are missing, looks up official iTunes catalog metadata via Apple Track ID to retry queries using canonical track title, artist, and album names. |
 | **Smart Status Indicators** | Provides real-time search feedback. Approximate or guessed results feature clear UI badges and notice text at the beginning of the lyrics, localized to the app language. |
 | **High-Precision Sync** | Real-time tracking of playback, pauses, seeking, and automatic track transitions, scheduled accurately around LRC timestamp boundaries. |
+| **Super Island Lyrics Switch** | Optionally shows the current lyric as the system media title while retaining song titles inside Apple Music. Turning the switch off or stopping sync restores the title. |
 | **Playback Controls** | Built-in play/pause, previous/next, and seek bar controls, paired with a 3-line scrollable lyric preview card with smooth transition animations. |
 | **Local Cache** | Caches up to 100 matching results locally. Includes a **Match again** option to bypass cached data for the current song whenever needed. |
 | **Modern UI & Localization** | Built with Material 3, supporting automatic system Light/Dark theme switching, alongside Chinese, English, and System Default language options. |
@@ -96,10 +97,11 @@
 ### Enable Sync Steps
 
 1. Build and install the APK following the [Build from Source](#build-from-source) section.
-2. Launch LyricsBridge, go to Settings, grant **Notification access**, and enable status notifications.
+2. Open LyricsBridge and use **Permission setup** on the home screen to grant **Notification access**. You can also enable **Status notifications**. On Xiaomi, Redmi, and POCO devices, use the guide to open Settings and set LyricsBridge’s **Battery saver** to **No restrictions** to keep lyrics updating in the background.
 3. Open Apple Music and start playing any track.
 4. Return to LyricsBridge to view lyrics and matching status. Auto-sync is enabled by default.
 5. If synchronization was manually paused, tap **Start auto-sync** to resume. Tap **Match again** if lyrics appear incorrect.
+6. To show lyrics on Xiaomi Super Island, enable **Super Island lyrics** in Settings. The switch is off by default and its value is saved on this device.
 
 > [!NOTE]
 > **Manual Pause Persistence**: Manual pause states are persisted. When auto-sync is enabled, launching the app, reconnecting the notification listener service, or detecting Apple Music notification/session changes will automatically trigger synchronization.
@@ -176,7 +178,7 @@ flowchart TD
 | `ucar.media.metadata.LYRICS_LINE` | `String` | Current single-line lyric text corresponding to current playback position |
 | `ucar.media.metadata.LYRICS_STATUS` | `Long` | Lyric availability status: `0` for available/synced; `1` for no lyrics or instrumental |
 
-Synchronization strictly preserves original track title, artist, and queue identifier. Background updates leverage media callbacks and lyric boundary sleep scheduling, maintained in memory via a low-priority Foreground Service notification.
+Synchronization preserves the original Media3 track title, artist, and queue identifier. With **Super Island lyrics** enabled, the current lyric is written to `android.media.metadata.TITLE` in Media3 metadata extras, which Apple Music publishes as the system media title. Apple Music keeps its original song title, and LyricsBridge uses the original Media3 information to identify tracks. Disabling the switch, stopping sync, or having no available lyric restores the song title. Background updates use media callbacks and lyric boundary scheduling, maintained by a low-priority Foreground Service notification.
 
 </details>
 
@@ -186,7 +188,7 @@ Synchronization strictly preserves original track title, artist, and queue ident
 
 ## ⚠️ Compatibility & Limitations
 
-- **Display Receiver Support**: Receiving system interfaces or Bluetooth head units must actively read the `ucar.media.metadata.*` lyric extension fields. Actual display behavior in Xiaomi HyperIsland, CarWith, or third-party launchers depends on device firmware and receiver implementation.
+- **Display Receiver Support**: Default synchronization requires receivers to read the lyric extension fields. With **Super Island lyrics** enabled, Xiaomi Super Island displays lyrics through the system media title. System notifications and Bluetooth head units reading that title also receive lyrics. Actual behavior depends on device firmware and receiver implementation.
 - **Apple Music Client Versions**: Metadata writing relies on Apple Music's Media3 behavior, which may change in future app updates. Tested on Xiaomi 15 (HyperOS 4) for automatic track changes and timed line updates while both apps were in the background on the home screen.
 - **Third-Party API Stability**: QQ Music and NetEase endpoints are undocumented and subject to change or temporary outage. Inaccurate provider metadata (durations, versions, artist credits) can affect matching.
 - **Multilingual Metadata & Native Lyrics**: iTunes Lookup only corrects metadata available in its regional catalogs. Automatic cross-region track ID mapping, complete multilingual title mapping, and direct retrieval of Apple Music's own lyrics are not supported.
